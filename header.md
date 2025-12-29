@@ -64,3 +64,104 @@ IWYU가 너무 무겁거나 설정이 까다롭다면, 다음 순서로 접근�
 빌드 시간이 가장 오래 걸리는 파일(Bottleneck)을 찾습니다.
 3단계: 해당 파일만 IWYU 적용
 병목이 되는 지점만 핀포인트로 전방 선언을 적용해 의존성을 끊어냅니다.
+
+`cpp-dependencies`는 프로젝트 내의 **폴더(컴포넌트)** 또는 **파일** 간의 의존성을 분석하여 **순환 참조(Cycle)**를 찾아내는 데 매우 최적화된 도구입니다. 대규모 상용 코드에서도 속도가 매우 빠르다는 장점이 있습니다.
+
+상용 프로젝트 환경을 고려한 상세 사용법과 결과 해석법을 정리해 드립니다.
+
+---
+
+### 1. 설치 (빠른 복습)
+보통 빌드해서 사용합니다.
+```bash
+git clone https://github.com/renato-bohler/cpp-dependencies.git
+cd cpp-dependencies
+mkdir build && cd build
+cmake ..
+make
+# 생성된 'cpp-dependencies' 실행 파일을 프로젝트 경로로 가져가거나 PATH에 등록하세요.
+```
+
+---
+
+### 2. 핵심 개념: "컴포넌트(Component)"
+이 도구는 기본적으로 **디렉토리(폴더)**를 하나의 '컴포넌트'로 인식합니다.
+*   `src/network` 폴더 안의 파일이 `src/common` 폴더의 파일을 `#include` 하면: **network → common** 의존성이 발생한다고 판단합니다.
+*   상용 코드에서는 수만 개의 파일이 있으므로, 파일 단위 분석보다 **폴더 단위(모듈 단위) 분석**이 아키텍처 파악에 훨씬 유리합니다.
+
+---
+
+### 3. 주요 명령어 및 실무 활용
+
+#### ① 기본 분석 (순환 참조 즉시 확인)
+프로젝트 루트에서 실행하면 자동으로 모든 하위 디렉토리를 스캔합니다.
+```bash
+./cpp-dependencies /path/to/your/project
+```
+*   **출력 내용:** 어떤 컴포넌트가 어떤 컴포넌트를 참조하는지 리스트업하고, 마지막에 **`!! Cycle detected !!`**라며 순환 고리를 보여줍니다.
+
+#### ② 파일 단위 분석 (`--detailed`)
+디렉토리 단위가 아니라 **파일 간의 순환 참조**를 정확히 알고 싶을 때 사용합니다.
+```bash
+./cpp-dependencies --detailed /path/to/your/project
+```
+*   대규모 프로젝트에서 이 옵션을 쓰면 결과가 너무 많을 수 있으므로, 특정 모듈 폴더 내에서만 실행하는 것을 추천합니다.
+
+#### ③ 불필요한 폴더 제외 (`--exclude`)
+상용 코드에는 `third-party`, `test`, `build`, `docs` 등 분석에 방해되는 폴더가 많습니다. 이를 제외해야 정확한 결과가 나옵니다.
+```bash
+./cpp-dependencies --exclude build --exclude third_party --exclude tests /path/to/your/project
+```
+
+#### ④ 의존성 그래프 시각화 (가장 추천)
+텍스트만으로는 복잡한 꼬임을 이해하기 어렵습니다. `Graphviz` 형식으로 뽑아서 그림으로 보세요.
+```bash
+# 1. dot 파일 생성
+./cpp-dependencies --graph out.dot /path/to/your/project
+
+# 2. 이미지로 변환 (Graphviz 설치 필요)
+dot -Tpng out.dot -o dependency_graph.png
+```
+*   그림을 보면 **화살표가 서로 마주 보거나 거대한 원을 그리며 돌아오는 부분**이 바로 수정해야 할 설계 결함 지점입니다.
+
+---
+
+### 4. 상용 대규모 코드 적용 팁
+
+#### TIP 1: 모듈별 분할 분석
+전체 소스가 100만 라인이라면 한꺼번에 보기보다 주요 모듈별로 끊어서 보세요.
+```bash
+# 네트워크 모듈과 공통 모듈 간의 관계만 확인
+./cpp-dependencies src/network src/common
+```
+
+#### TIP 2: 인클루드 경로 지정 (`-I`)
+코드가 `#include "header.h"`가 아니라 `#include <module/header.h>` 식으로 되어 있다면, 검색 경로를 명시해줘야 합니다.
+```bash
+./cpp-dependencies -I ./include -I ./src /path/to/your/project
+```
+
+---
+
+### 5. 결과 해석 및 해결 시나리오
+
+분석 결과가 다음과 같이 나왔다고 가정해 봅시다.
+```text
+!! Cycle detected:
+   Component 'Auth' depends on 'Database'
+   Component 'Database' depends on 'Logger'
+   Component 'Logger' depends on 'Auth'  <-- 문제 발생!
+```
+
+**해결 방법:**
+1.  **순환 고리 끊기:** `Logger`가 `Auth`를 참조하는 이유를 찾습니다. (예: 로그에 사용자 이름을 찍으려고 Auth 구조체를 참조함)
+2.  **의존성 역전/분리:**
+    *   `Logger`에서는 `Auth` 구조체 전체를 참조하지 말고, 단순 문자열(`char*`)만 받도록 함수를 수정합니다.
+    *   또는 `Auth`와 `Logger`가 공통으로 사용하는 타입을 별도의 `Common_Types.h`로 분리합니다.
+3.  **전방 선언 활용:** 헤더 파일 수준의 순환이라면, 앞서 설명한 **전방 선언**을 통해 `#include`를 제거합니다.
+
+### 요약: 어떤 상황에 쓰나요?
+*   **cpp-dependencies:** "전체적인 설계가 어디서 꼬였지? 어느 폴더끼리 서로 참조하지?"를 찾을 때 (거시적 분석)
+*   **IWYU:** "이 파일에서 순환 참조를 끊으려면 어떤 `#include`를 지우고 어떤 전방 선언을 넣어야 하지?"를 찾을 때 (미시적 분석)
+
+상용 코드라면 먼저 `cpp-dependencies --graph`로 **전체 구조의 꼬임**을 시각화해서 확인한 뒤, 심각한 부분부터 `IWYU`로 **개별 파일 최적화**를 진행하는 순서가 가장 효율적입니다.
