@@ -121,3 +121,81 @@ Cline(특히 Claude 모델 사용 시)은 XML 구조를 매우 신뢰합니다. 
 
 **가장 추천하는 조합:**
 방법 1의 **"ALL TOOLS ARE LOCKED"** 문구를 사용해 보세요. LLM은 자신의 기능을 제한한다는 경고에 매우 민감하게 반응하므로 성공 확률이 가장 높습니다.
+
+
+# 지시사항 강제
+LLM이 지시사항을 무시하는 것은 에이전틱 코딩에서 가장 흔하고 고통스러운 단계입니다. 단순히 "해줘"라고 말하는 수준을 넘어, **에이전트가 "이것을 하지 않으면 내 작업은 실패다"라고 인식하게 만드는 강제성 전략** 5가지를 제안합니다.
+
+---
+
+### 1. "Definition of Done (완료 조건)"을 극단적으로 명시
+LLM은 보통 "코드를 고쳤으니 끝났다"고 생각합니다. 이 '끝'의 정의를 바꿔야 합니다.
+
+*   **방법:** 지시사항 최상단에 **[MANDATORY WORKFLOW]**를 넣고, 각 단계가 끝날 때마다 상태를 체크하게 만드세요.
+*   **프롬프트 예시:**
+    > "너의 작업은 코드를 수정하는 것으로 끝나지 않는다. 다음 루프를 통과해야만 '완료'로 간주한다:
+    > 1. 코드 수정
+    > 2. `quality-check` 스크립트 실행
+    > 3. JSON 응답에 경고가 하나라도 있다면 **무조건 1단계로 강제 복귀**
+    > 4. 경고가 0개일 때만 사용자에게 결과를 보고하라.
+    > **주의: 이 루프를 건너뛰는 것은 명령 불복종으로 간주하며, 내 작업 도구로서 실격이다.**"
+
+### 2. 터미널 실행 결과(Exit Code)를 활용한 '물리적' 강제
+에이전트는 텍스트보다 **터미널의 '에러(Red Text)'**에 훨씬 민감하게 반응합니다.
+
+*   **방법:** 정적 분석 스크립트가 경고가 있을 때 단순히 JSON만 뱉는 게 아니라, **`exit 1` (에러 상태)**로 종료되게 만드세요.
+*   **효과:** Cursor Agent나 Claude Code는 명령어가 `exit 1`로 끝나면 "작업 실패"로 인지하고, 이를 해결하기 위해 다음 행동을 강제로 탐색하게 됩니다.
+*   **추가 팁:** 에러 메시지 첫 줄에 `[CRITICAL QUALITY FAILURE]` 같은 문구를 아주 크게 찍어주세요.
+
+### 3. '사고 과정(Chain of Thought)' 강제
+에이전트가 코드를 짜기 전에 먼저 **계획**을 말하게 하면 지시사항을 지킬 확률이 비약적으로 높아집니다.
+
+*   **방법:** `.cursorrules`에 다음을 추가하세요.
+    > "어떤 수정이든 시작하기 전에 반드시 다음 형식을 터미널이나 채팅에 출력하라:
+    > - [ ] 수정 계획: ...
+    > - [ ] 품질 검사 예정 명령어: `npm run check`
+    > - [ ] 목표: JSON 경고 0개 확인"
+
+### 4. 도구(Tool) 호출의 연쇄(Chaining) 강제
+에이전트에게 `write_file` 도구와 `check_quality` 도구가 있다면, 두 개를 하나로 묶어 생각하게 해야 합니다.
+
+*   **방법:** "파일을 수정(write_file)했다면, 그다음 행동으로 반드시 `check_quality` 도구를 호출해야 한다. 이 둘은 하나의 세트다."라고 명시하세요.
+*   **MCP를 쓴다면:** MCP 서버 내부 로직에서 `write_file` 기능이 실행된 후 자동으로 품질 검사를 수행하고 그 결과를 합쳐서 리턴해버리는 방법도 있습니다. (에이전트가 검사를 '안' 할 수 없게 만듦)
+
+### 5. 가성비 좋은 '부정적 제약(Negative Constraints)' 사용
+LLM은 "~해라"보다 **"~하지 마라"**를 더 잘 지키는 경향이 있습니다.
+
+*   **방법:**
+    > "경고가 남은 상태에서 '작업을 완료했습니다'라고 말하지 마라."
+    > "품질 검사 스크립트를 실행하지 않고 파일을 저장하는 것을 금지한다."
+    > "JSON 응답을 사람이 읽는 방식이 아닌, 데이터 그 자체로 엄격하게 해석하라."
+
+---
+
+### 실전 적용을 위한 `.cursorrules` (또는 지시사항) 템플릿
+
+```markdown
+# STRICT QUALITY ENFORCEMENT
+Every task MUST follow the "Check-Fix-Verify" loop.
+
+1. TRIGGER: On any code change.
+2. ACTION: Run `npm run quality-check-json`.
+3. DECISION:
+   - IF result contains ANY warnings/errors: 
+     - REASON: Analyze the JSON output.
+     - LOOP: Go back to step 1 and fix the issues.
+   - IF result is clean ([]): 
+     - FINISH: Report success.
+
+[CONSTRAINTS]
+- DO NOT ask for user permission to fix lint/quality issues. Just fix them.
+- DO NOT ignore the JSON output even if it seems minor.
+- IF you fail to clear warnings after 3 attempts, explain exactly why (e.g., "Conflict with Rule X").
+```
+
+### 그래도 안 된다면?
+**Cursor의 경우:** `@rules` 기능을 써서 채팅창에 "이 규칙을 엄격히 준수해"라고 다시 한번 강조하거나, `Cursor Settings -> General -> Rules for AI`에 위 내용을 직접 넣으세요.
+
+**Claude Code의 경우:** `.claudecode.json`에 `customInstructions`를 사용하여 "너는 코드 수정을 마칠 때 반드시 특정 검사 도구를 실행해야 하는 에이전트다"라고 역할(Role)을 아주 좁게 정의해 주는 것이 효과적입니다.
+
+핵심은 **"검사 스크립트의 종료 상태(Exit Code)를 실패로 만들고, 루프를 돌지 않으면 작업이 끝난 것이 아님을 명확히 하는 것"**입니다. 
