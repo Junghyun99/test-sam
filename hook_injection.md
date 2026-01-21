@@ -198,4 +198,27 @@ Every task MUST follow the "Check-Fix-Verify" loop.
 
 **Claude Code의 경우:** `.claudecode.json`에 `customInstructions`를 사용하여 "너는 코드 수정을 마칠 때 반드시 특정 검사 도구를 실행해야 하는 에이전트다"라고 역할(Role)을 아주 좁게 정의해 주는 것이 효과적입니다.
 
-핵심은 **"검사 스크립트의 종료 상태(Exit Code)를 실패로 만들고, 루프를 돌지 않으면 작업이 끝난 것이 아님을 명확히 하는 것"**입니다. 
+핵심은 **"검사 스크립트의 종료 상태(Exit Code)를 실패로 만들고, 루프를 돌지 않으면 작업이 끝난 것이 아님을 명확히 하는 것"**입니다.
+
+
+
+# .clinerules 파일
+
+CRITICAL: DO NOT USE attempt_completion BEFORE REFACTORING
+
+## 코드 수정 후 필수 단계
+
+<thinking>
+BEFORE using attempt_completion, I MUST verify:
+□ 품질 검사를 통과했는가?
+□ 리팩토링이 완료되었는가?
+□ 모든 코드 품질 문제가 해결되었는가?
+
+If ANY answer is "no", I MUST NOT use attempt_completion.
+</thinking>
+
+❗ STOP AND VERIFY:
+□ 품질 검사 통과
+□ 리팩토링 완료
+
+Only after ALL checks pass can attempt_completion be used.
